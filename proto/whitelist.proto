@@ -1,0 +1,68 @@
+syntax = "proto3";
+
+package whitelist;
+
+import "google/api/annotations.proto";
+import "google/protobuf/empty.proto";
+
+option go_package = "github.com/mkseven15/whitelist-server/proto";
+
+// The Whitelist Service Definition
+service WhitelistService {
+  // 1. Get a One-Time Access Token (Public)
+  rpc GetAuthToken(google.protobuf.Empty) returns (AuthTokenResponse) {
+    option (google.api.http) = {
+      post: "/v1/auth/token"
+      body: "*"
+    };
+  }
+
+  // 2. Validate a License Key (Requires OTAT)
+  rpc ValidateLicense(ValidateRequest) returns (ValidateResponse) {
+    option (google.api.http) = {
+      post: "/v1/license/validate"
+      body: "*"
+    };
+  }
+
+  // 3. Create/Update License (Admin Only)
+  rpc UpdateLicense(UpdateLicenseRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {
+      put: "/v1/license"
+      body: "*"
+    };
+  }
+
+  // 4. Delete License (Admin Only)
+  rpc DeleteLicense(DeleteLicenseRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {
+      delete: "/v1/license/{license_key}"
+    };
+  }
+}
+
+message AuthTokenResponse {
+  string token = 1;
+  int64 expires_in_seconds = 2;
+}
+
+message ValidateRequest {
+  string license_key = 1;
+  string product_id = 2;
+  string hwid = 3; 
+}
+
+message ValidateResponse {
+  bool valid = 1;
+  string message = 2;
+}
+
+message UpdateLicenseRequest {
+  string license_key = 1;
+  string product_id = 2;
+  bool is_active = 3;
+}
+
+message DeleteLicenseRequest {
+  string license_key = 1;
+}
