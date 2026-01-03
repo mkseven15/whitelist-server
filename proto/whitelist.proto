@@ -7,17 +7,16 @@ import "google/protobuf/empty.proto";
 
 option go_package = "github.com/mkseven15/whitelist-server/proto";
 
-// The Whitelist Service Definition
 service WhitelistService {
-  // 1. Get a One-Time Access Token (Public)
-  rpc GetAuthToken(google.protobuf.Empty) returns (AuthTokenResponse) {
+  // 1. Get Token (Now requires API Key)
+  rpc GetAuthToken(GetTokenRequest) returns (AuthTokenResponse) {
     option (google.api.http) = {
       post: "/v1/auth/token"
       body: "*"
     };
   }
 
-  // 2. Validate a License Key (Requires OTAT)
+  // 2. Validate License
   rpc ValidateLicense(ValidateRequest) returns (ValidateResponse) {
     option (google.api.http) = {
       post: "/v1/license/validate"
@@ -25,7 +24,7 @@ service WhitelistService {
     };
   }
 
-  // 3. Create/Update License (Admin Only)
+  // 3. Create/Update License (Admin)
   rpc UpdateLicense(UpdateLicenseRequest) returns (google.protobuf.Empty) {
     option (google.api.http) = {
       put: "/v1/license"
@@ -33,12 +32,17 @@ service WhitelistService {
     };
   }
 
-  // 4. Delete License (Admin Only)
+  // 4. Delete License (Admin)
   rpc DeleteLicense(DeleteLicenseRequest) returns (google.protobuf.Empty) {
     option (google.api.http) = {
       delete: "/v1/license/{license_key}"
     };
   }
+}
+
+// New Request Message for API Key
+message GetTokenRequest {
+  string api_key = 1;
 }
 
 message AuthTokenResponse {
@@ -49,7 +53,7 @@ message AuthTokenResponse {
 message ValidateRequest {
   string license_key = 1;
   string product_id = 2;
-  string hwid = 3; 
+  string hwid = 3;
 }
 
 message ValidateResponse {
