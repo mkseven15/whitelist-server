@@ -126,7 +126,7 @@ func (s *WhitelistService) ValidateLicense(ctx context.Context, req *pb.Validate
 	}
 
 	if !isActive {
-		return &pb.ValidateResponse{Valid: false, Message: "License is banned or inactive"}, nil
+		return &pb.ValidateResponse{Valid: false, Message: "License is suspended"}, nil
 	}
 
 	if req.Hwid != "" {
