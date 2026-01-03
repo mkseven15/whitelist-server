@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings" // Added string manipulation package
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	_ "github.com/lib/pq" // Postgres driver
@@ -14,8 +15,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/reflection"
 
-	pb "github.com/mkseven15/whitelist-server/proto"
-	"github.com/mkseven15/whitelist-server/internal/service"
+	pb "github.com/youruser/whitelist-server/proto"
+	"github.com/youruser/whitelist-server/internal/service"
 )
 
 func main() {
@@ -90,17 +91,21 @@ func main() {
 	log.Fatal(gwServer.ListenAndServe())
 }
 
+// customMatcher allows specific headers to pass through to the gRPC context
 func customMatcher(key string) (string, bool) {
-	switch key {
+	// FIX: Go converts headers to Canonical format (e.g. X-Access-Token)
+	// We must lowercase the key to match our switch cases correctly.
+	switch strings.ToLower(key) {
 	case "x-access-token":
-		return key, true
+		return strings.ToLower(key), true
 	case "x-admin-secret":
-		return key, true
+		return strings.ToLower(key), true
 	default:
 		return runtime.DefaultHeaderMatcher(key)
 	}
 }
 
+// corsMiddleware adds CORS headers for web compatibility
 func corsMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
