@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"database/sql"
+	"log"
 	"os"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -18,18 +20,35 @@ type WhitelistService struct {
 	db *sql.DB
 }
 
+// NewWhitelistService initializes the service AND starts the background cleaner
 func NewWhitelistService(db *sql.DB) *WhitelistService {
-	return &WhitelistService{db: db}
+	s := &WhitelistService{db: db}
+	
+	// Start Automatic Token Cleanup in the background
+	go s.cleanupExpiredTokens()
+	
+	return s
 }
 
-// Helper to check admin secret
+// cleanupExpiredTokens runs every minute to remove old tokens from DB
+func (s *WhitelistService) cleanupExpiredTokens() {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+	
+	for range ticker.C {
+		// Delete tokens where 'expires_at' is in the past
+		_, err := s.db.Exec("DELETE FROM access_tokens WHERE expires_at < NOW()")
+		if err != nil {
+			log.Printf("Error cleaning up tokens: %v", err)
+		}
+	}
+}
+
 func (s *WhitelistService) checkAdmin(ctx context.Context) error {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
 		return status.Error(codes.Unauthenticated, "metadata missing")
 	}
-	
-	// Check for x-admin-secret header
 	values := md.Get("x-admin-secret")
 	if len(values) == 0 || values[0] != os.Getenv("ADMIN_SECRET") {
 		return status.Error(codes.PermissionDenied, "invalid admin secret")
@@ -37,11 +56,32 @@ func (s *WhitelistService) checkAdmin(ctx context.Context) error {
 	return nil
 }
 
-// 1. GetAuthToken: Creates a short-lived token in Supabase
-func (s *WhitelistService) GetAuthToken(ctx context.Context, _ *emptypb.Empty) (*pb.AuthTokenResponse, error) {
+// 1. GetAuthToken: Now validates API Key before issuing token
+func (s *WhitelistService) GetAuthToken(ctx context.Context, req *pb.GetTokenRequest) (*pb.AuthTokenResponse, error) {
+	// Validate Input
+	if req.ApiKey == "" {
+		return nil, status.Error(codes.InvalidArgument, "API Key required")
+	}
+
+	// Check DB: Key must exist AND (ExpiresAt is NULL OR ExpiresAt > Now)
+	var exists bool
+	query := `SELECT EXISTS(
+		SELECT 1 FROM api_keys 
+		WHERE key = $1 
+		AND (expires_at IS NULL OR expires_at > NOW())
+	)`
+	
+	err := s.db.QueryRow(query, req.ApiKey).Scan(&exists)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "DB Check Failed: %v", err)
+	}
+	if !exists {
+		return nil, status.Error(codes.Unauthenticated, "Invalid or Expired API Key")
+	}
+
+	// Generate Token
 	var token string
-	// Insert and return the generated UUID
-	err := s.db.QueryRow("INSERT INTO access_tokens DEFAULT VALUES RETURNING token").Scan(&token)
+	err = s.db.QueryRow("INSERT INTO access_tokens DEFAULT VALUES RETURNING token").Scan(&token)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to generate token: %v", err)
 	}
@@ -52,22 +92,19 @@ func (s *WhitelistService) GetAuthToken(ctx context.Context, _ *emptypb.Empty) (
 	}, nil
 }
 
-// 2. ValidateLicense: Checks token validity AND license validity
+// 2. ValidateLicense
 func (s *WhitelistService) ValidateLicense(ctx context.Context, req *pb.ValidateRequest) (*pb.ValidateResponse, error) {
-	// A. Validate Access Token (One-Time Use)
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
 		return nil, status.Error(codes.Unauthenticated, "no metadata")
 	}
-	
 	tokens := md.Get("x-access-token")
 	if len(tokens) == 0 {
 		return nil, status.Error(codes.Unauthenticated, "missing x-access-token header")
 	}
-	accessToken := tokens[0]
 
-	// Check if token exists and is valid (delete it immediately to ensure one-time use)
-	res, err := s.db.Exec("DELETE FROM access_tokens WHERE token = $1 AND expires_at > NOW()", accessToken)
+	// Validate & Burn Token
+	res, err := s.db.Exec("DELETE FROM access_tokens WHERE token = $1 AND expires_at > NOW()", tokens[0])
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "db error: %v", err)
 	}
@@ -76,10 +113,9 @@ func (s *WhitelistService) ValidateLicense(ctx context.Context, req *pb.Validate
 		return nil, status.Error(codes.Unauthenticated, "invalid or expired access token")
 	}
 
-	// B. Validate License Key
+	// Validate License
 	var isActive bool
 	var storedHwid sql.NullString
-
 	query := "SELECT is_active, hwid FROM licenses WHERE license_key = $1 AND product_id = $2"
 	err = s.db.QueryRow(query, req.LicenseKey, req.ProductId).Scan(&isActive, &storedHwid)
 
@@ -93,10 +129,8 @@ func (s *WhitelistService) ValidateLicense(ctx context.Context, req *pb.Validate
 		return &pb.ValidateResponse{Valid: false, Message: "License is banned or inactive"}, nil
 	}
 
-	// Optional: HWID Locking
 	if req.Hwid != "" {
 		if !storedHwid.Valid || storedHwid.String == "" {
-			// Lock to this HWID
 			_, _ = s.db.Exec("UPDATE licenses SET hwid = $1 WHERE license_key = $2", req.Hwid, req.LicenseKey)
 		} else if storedHwid.String != req.Hwid {
 			return &pb.ValidateResponse{Valid: false, Message: "HWID mismatch"}, nil
@@ -108,9 +142,7 @@ func (s *WhitelistService) ValidateLicense(ctx context.Context, req *pb.Validate
 
 // 3. UpdateLicense (Admin)
 func (s *WhitelistService) UpdateLicense(ctx context.Context, req *pb.UpdateLicenseRequest) (*emptypb.Empty, error) {
-	if err := s.checkAdmin(ctx); err != nil {
-		return nil, err
-	}
+	if err := s.checkAdmin(ctx); err != nil { return nil, err }
 
 	_, err := s.db.Exec(`
 		INSERT INTO licenses (license_key, product_id, is_active)
@@ -119,23 +151,14 @@ func (s *WhitelistService) UpdateLicense(ctx context.Context, req *pb.UpdateLice
 		DO UPDATE SET product_id = $2, is_active = $3
 	`, req.LicenseKey, req.ProductId, req.IsActive)
 
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to upsert: %v", err)
-	}
-
+	if err != nil { return nil, status.Errorf(codes.Internal, "upsert failed: %v", err) }
 	return &emptypb.Empty{}, nil
 }
 
 // 4. DeleteLicense (Admin)
 func (s *WhitelistService) DeleteLicense(ctx context.Context, req *pb.DeleteLicenseRequest) (*emptypb.Empty, error) {
-	if err := s.checkAdmin(ctx); err != nil {
-		return nil, err
-	}
-
+	if err := s.checkAdmin(ctx); err != nil { return nil, err }
 	_, err := s.db.Exec("DELETE FROM licenses WHERE license_key = $1", req.LicenseKey)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to delete: %v", err)
-	}
-
+	if err != nil { return nil, status.Errorf(codes.Internal, "delete failed: %v", err) }
 	return &emptypb.Empty{}, nil
 }
