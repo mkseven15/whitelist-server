@@ -1,5 +1,6 @@
 # STAGE 1: Build the application
-FROM golang:1.22-bookworm AS builder
+# UPDATED: Changed from 1.22 to 1.24 to match your go.mod requirement
+FROM golang:1.24-bookworm AS builder
 
 # Install Protocol Buffers Compiler
 RUN apt-get update && apt-get install -y protobuf-compiler
