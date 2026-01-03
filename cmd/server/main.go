@@ -15,8 +15,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/reflection"
 
-	pb "github.com/youruser/whitelist-server/proto"
-	"github.com/youruser/whitelist-server/internal/service"
+	pb "github.com/mkseven15/whitelist-server/proto"
+	"github.com/mkseven15/whitelist-server/internal/service"
 )
 
 func main() {
